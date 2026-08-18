@@ -27,11 +27,11 @@ def processar_campos(texto, dados_cliente):
     """Substitui os campos dinâmicos no texto"""
     # Mapeia os placeholders para os dados
     substituicoes = {
-        '«RECLAMANTE»': dados_cliente.get('nome', '___________________________________'),
-        '«CPF»': dados_cliente.get('cpf', '___________________________________'),
-        '«RG»': dados_cliente.get('rg', '___________________________________'),
-        '«PIS»': dados_cliente.get('pis', '___________________________________'),
-        '«ENDEREÇO»': dados_cliente.get('endereco', '___________________________________'),
+        '«RECLAMANTE»': dados_cliente.get('nome', 'RODRIGO MEIRELES DA SILVA'),
+        '«CPF»': dados_cliente.get('cpf', '727.32296104    '),
+        '«RG»': dados_cliente.get('rg', '441899'),
+        '«PIS»': dados_cliente.get('pis', '19191919191'),
+        '«ENDEREÇO»': dados_cliente.get('endereco', 'RUA OK'),
         '«DATA_ATUAL»': dados_cliente.get('data', datetime.now().strftime('%d de %B de %Y'))
     }
     
