@@ -1,0 +1,10 @@
+{
+  "cliente": {
+    "nome": "João Silva",
+    "cpf": "123.456.789-00",
+    "rg": "1.234.567",
+    "pis": "120.123.456-78",
+    "endereco": "Rua ABC, 123, Goiânia - GO",
+    "data": "18 de agosto de 2026"
+  }
+}
