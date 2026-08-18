@@ -23,12 +23,6 @@ def carregar_dados(arquivo_json="dados.json"):
         print(f"Erro: Arquivo '{arquivo_json}' não é um JSON válido!")
         exit(1)
 
-def fazer_negrito(paragrafo, texto):
-    """Adiciona texto em negrito a um parágrafo"""
-    run = paragrafo.add_run(texto)
-    run.bold = True
-    return run
-
 def processar_campos(texto, dados_cliente):
     """Substitui os campos dinâmicos no texto"""
     # Mapeia os placeholders para os dados
@@ -70,16 +64,15 @@ def adicionar_paragrafo_com_negrito(doc, texto, dados_cliente):
     """Adiciona um parágrafo, colocando o nome do cliente em negrito"""
     nome_cliente = dados_cliente.get('nome', '')
     
-    # Se o texto contém o nome do cliente, faz especial
-    if nome_cliente and f'«RECLAMANTE»' in texto:
-        # Substitui primeiro
-        texto = processar_campos(texto, dados_cliente)
-        
-        # Agora adiciona o parágrafo com o nome em negrito
+    # Processa os campos primeiro
+    texto_processado = processar_campos(texto, dados_cliente)
+    
+    # Se o texto contém o nome do cliente, faz em negrito
+    if nome_cliente and nome_cliente in texto_processado:
         paragrafo = doc.add_paragraph()
         
         # Divide o texto pelo nome
-        partes = texto.split(nome_cliente)
+        partes = texto_processado.split(nome_cliente)
         
         if len(partes) > 1:
             # Adiciona a parte antes do nome
@@ -95,12 +88,11 @@ def adicionar_paragrafo_com_negrito(doc, texto, dados_cliente):
                 paragrafo.add_run(parte)
         else:
             # Se não encontrou o nome exato, adiciona normal
-            paragrafo.add_run(texto)
+            paragrafo.add_run(texto_processado)
         
         return paragrafo
     else:
-        # Processa campos normalmente
-        texto_processado = processar_campos(texto, dados_cliente)
+        # Adiciona normal
         return doc.add_paragraph(texto_processado)
 
 def criar_documento(template_word, conteudo_texto, nome_arquivo, dados_cliente):
@@ -108,9 +100,10 @@ def criar_documento(template_word, conteudo_texto, nome_arquivo, dados_cliente):
     # Carrega o documento template
     try:
         doc = Document(template_word)
+        print(f"   Usando template: {template_word}")
     except FileNotFoundError:
-        print(f"Erro: Template Word '{template_word}' não encontrado!")
-        # Se não existir, cria um novo
+        print(f"⚠️  Template Word '{template_word}' não encontrado!")
+        print("   Criando documento sem template visual...")
         doc = Document()
     
     # Cria pasta de saída se não existir
@@ -134,11 +127,11 @@ def criar_documento(template_word, conteudo_texto, nome_arquivo, dados_cliente):
             titulo_run.bold = True
             titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
         else:
-            # Conteúdo normal
+            # Conteúdo normal (pode ter nome em negrito)
             adicionar_paragrafo_com_negrito(doc, linha, dados_cliente)
     
     # Salva o documento
-    caminho_docx = pasta_saida / nome_arquivo.replace('.pdf', '.docx')
+    caminho_docx = pasta_saida / nome_arquivo
     
     try:
         doc.save(str(caminho_docx))
@@ -157,8 +150,7 @@ def converter_para_pdf(arquivo_docx):
         print(f"✓ PDF criado: {arquivo_pdf}")
         return True
     except ImportError:
-        print("⚠️  docx2pdf não instalado. PDFs não serão gerados automaticamente.")
-        print("   Para gerar PDFs, instale: pip install docx2pdf")
+        print("⚠️  Para gerar PDFs, instale: pip install python-docx python-docx2pdf")
         return False
     except Exception as e:
         print(f"⚠️  Erro ao converter para PDF: {e}")
@@ -166,40 +158,37 @@ def converter_para_pdf(arquivo_docx):
 
 def gerar_documentos():
     """Função principal que gera todos os documentos"""
-    print("\n" + "="*50)
-    print("GERADOR DE DOCUMENTOS ADVOCATÍCIOS")
-    print("="*50 + "\n")
+    print("\n" + "="*60)
+    print("GERADOR DE DOCUMENTOS ADVOCATÍCIOS - MEIRELES E SOUZA")
+    print("="*60 + "\n")
     
     # Carrega os dados
     dados = carregar_dados()
     cliente = dados.get('cliente', {})
     nome_cliente = cliente.get('nome', 'cliente').lower().replace(' ', '_')
     
-    print(f"Cliente: {cliente.get('nome')}")
-    print(f"CPF: {cliente.get('cpf')}")
-    print(f"RG: {cliente.get('rg', 'Não informado')}")
-    print(f"PIS: {cliente.get('pis', 'Não informado')}")
-    print("\n" + "-"*50 + "\n")
+    print(f"👤 Cliente: {cliente.get('nome')}")
+    print(f"📋 CPF: {cliente.get('cpf')}")
+    print(f"📋 RG: {cliente.get('rg', 'Não informado')}")
+    print(f"📋 PIS: {cliente.get('pis', 'Não informado')}")
+    print(f"📍 Endereço: {cliente.get('endereco')}")
+    print("\n" + "-"*60 + "\n")
     
-    # Verifica se existe template Word
-    template_word = "template.docx"
-    if not Path(template_word).exists():
-        print(f"⚠️  Template Word '{template_word}' não encontrado!")
-        print("   Criando documentos sem template visual...")
-        template_word = None
+    # Usa o template Word disponível
+    template_word = "Modelo Pagina 2.docx"
     
     # Templates
     templates = [
-        ("templates/contrato.txt", "contrato", f"01_contrato_{nome_cliente}.docx"),
-        ("templates/hipossuficiencia.txt", "hipossuficiência", f"02_hipossuficiencia_{nome_cliente}.docx"),
-        ("templates/procuracao.txt", "procuração", f"03_procuracao_{nome_cliente}.docx"),
+        ("templates/contrato.txt", "Contrato de Serviços Advocatícios", f"01_contrato_{nome_cliente}.docx"),
+        ("templates/hipossuficiencia.txt", "Declaração de Hipossuficiência", f"02_hipossuficiencia_{nome_cliente}.docx"),
+        ("templates/procuracao.txt", "Procuração Ad-Judicia", f"03_procuracao_{nome_cliente}.docx"),
     ]
     
     documentos_gerados = 0
     
     # Gera cada documento
     for arquivo_template, nome_doc, nome_saida in templates:
-        print(f"Processando: {nome_doc}...")
+        print(f"📝 Processando: {nome_doc}...")
         
         # Carrega o template de texto
         template = carregar_template(arquivo_template)
@@ -212,10 +201,11 @@ def gerar_documentos():
             arquivo_docx = Path("saida") / nome_saida
             converter_para_pdf(arquivo_docx)
     
-    print("\n" + "-"*50)
-    print(f"\n✓ Processo concluído!")
-    print(f"✓ {documentos_gerados} documento(s) gerado(s) na pasta 'saida/'")
-    print("\n" + "="*50 + "\n")
+    print("\n" + "-"*60)
+    print(f"\n✅ Processo concluído!")
+    print(f"✅ {documentos_gerados} documento(s) gerado(s) na pasta 'saida/'")
+    print(f"📁 Local: {Path('saida').absolute()}")
+    print("\n" + "="*60 + "\n")
 
 if __name__ == "__main__":
     gerar_documentos()
