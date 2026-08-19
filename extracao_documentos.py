@@ -114,15 +114,28 @@ def _campo_por_rotulo(texto: str, rotulos: list[str]) -> str:
 
 def _nome_por_heuristica(texto: str) -> str:
     """Fallback para OCR sem rótulo: seleciona uma linha provável de nome completo."""
-    ignorar = {"NOME", "CPF", "PIS", "NIT", "FGTS", "TRABALHADOR", "SEGURADO", "CARTEIRA", "PROFISSIONAL"}
+    ignorar = {
+        "NOME", "CPF", "PIS", "NIT", "FGTS", "TRABALHADOR", "SEGURADO", "CARTEIRA", "PROFISSIONAL",
+        "ENDERECO", "ENDEREÇO", "LOGRADOURO", "BAIRRO", "CEP", "RUA", "AVENIDA", "AV", "QUADRA",
+        "LOTE", "NUMERO", "NÚMERO", "COMPLEMENTO", "CIDADE", "ESTADO",
+    }
     for linha in texto.splitlines():
         candidato = " ".join(linha.strip().split())
         palavras = re.findall(r"[A-Za-zÀ-ÿ]+", candidato)
+        palavras_normalizadas = {palavra.upper().replace("É", "E").replace("Ç", "C") for palavra in palavras}
         if 2 <= len(palavras) <= 8 and 8 <= len(candidato) <= 80:
             maiusculas = candidato.upper() == candidato
-            if maiusculas and not any(palavra in ignorar for palavra in palavras):
+            tem_numero = bool(re.search(r"\d", candidato))
+            parece_endereco = bool(palavras_normalizadas & ignorar)
+            if maiusculas and not tem_numero and not parece_endereco:
                 return candidato
     return ""
+
+
+def _nome_valido(valor: str) -> bool:
+    palavras = {palavra.upper() for palavra in re.findall(r"[A-Za-zÀ-ÿ]+", valor)}
+    proibidas = {"ENDERECO", "ENDEREÇO", "LOGRADOURO", "BAIRRO", "CEP", "RUA", "AVENIDA", "NUMERO", "NÚMERO"}
+    return bool(valor) and not re.search(r"\d", valor) and not (palavras & proibidas) and len(palavras) >= 2
 
 
 def extrair_campos(texto: str) -> dict[str, str]:
@@ -134,6 +147,8 @@ def extrair_campos(texto: str) -> dict[str, str]:
     ], texto)
     nome = nome or _campo_por_rotulo(texto, ["nome", "nome completo", "nome do trabalhador", "nome do segurado", "titular", "segurado"])
     nome = nome or _nome_por_heuristica(texto)
+    if not _nome_valido(nome):
+        nome = ""
     cpf = _primeiro([r"CPF\s*[:\-]?\s*([0-9.\-]{11,14})", r"\b([0-9]{3}\.?[0-9]{3}\.?[0-9]{3}\-?[0-9]{2})\b"], texto)
     pis = _primeiro([r"(?:PIS|NIT|PASEP|PIS/PASEP)\s*[:nº°\-]*\s*([0-9.\-]{8,20})"], texto)
     pis = pis or _campo_por_rotulo(texto, ["PIS", "NIT", "PASEP", "PIS/PASEP"])
