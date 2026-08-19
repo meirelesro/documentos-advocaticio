@@ -95,22 +95,83 @@ def _normalizar_documento(valor: str) -> str:
     return valor.strip(" .:;-\n\t")
 
 
+def _campo_por_rotulo(texto: str, rotulos: list[str]) -> str:
+    """Busca o valor na mesma linha ou na próxima linha não vazia."""
+    linhas = [linha.strip() for linha in texto.splitlines()]
+    padrao_rotulo = re.compile(r"^(?:" + "|".join(rotulos) + r")\s*(?:[:\-–]|n[º°o]?|$)", re.IGNORECASE)
+    for indice, linha in enumerate(linhas):
+        if not linha:
+            continue
+        mesma_linha = re.match(r"^(?:" + "|".join(rotulos) + r")\s*(?:[:\-–]|n[º°o]?\s*[:\-–]?)\s*(.+)$", linha, re.IGNORECASE)
+        if mesma_linha and mesma_linha.group(1).strip():
+            return _normalizar_documento(mesma_linha.group(1))
+        if padrao_rotulo.match(linha):
+            for proxima in linhas[indice + 1: indice + 4]:
+                if proxima and not re.match(r"^(CPF|PIS|NIT|RG|DATA|ENDEREÇO)\b", proxima, re.IGNORECASE):
+                    return _normalizar_documento(proxima)
+    return ""
+
+
+def _nome_por_heuristica(texto: str) -> str:
+    """Fallback para OCR sem rótulo: seleciona uma linha provável de nome completo."""
+    ignorar = {"NOME", "CPF", "PIS", "NIT", "FGTS", "TRABALHADOR", "SEGURADO", "CARTEIRA", "PROFISSIONAL"}
+    for linha in texto.splitlines():
+        candidato = " ".join(linha.strip().split())
+        palavras = re.findall(r"[A-Za-zÀ-ÿ]+", candidato)
+        if 2 <= len(palavras) <= 8 and 8 <= len(candidato) <= 80:
+            maiusculas = candidato.upper() == candidato
+            if maiusculas and not any(palavra in ignorar for palavra in palavras):
+                return candidato
+    return ""
+
+
 def extrair_campos(texto: str) -> dict[str, str]:
-    """Extrai apenas padrões claros; o usuário sempre revisa o resultado."""
+    """Extrai padrões de documentos brasileiros; o usuário sempre revisa o resultado."""
     texto = texto.replace("\r", "")
+    nome = _primeiro([
+        r"(?:nome(?: completo)?|nome do trabalhador|nome do segurado|titular|trabalhador)\s*[:\-]\s*([^\n]+)",
+        r"(?:nome(?: completo)?|nome do trabalhador|nome do segurado|titular)\s*\n\s*([^\n]+)",
+    ], texto)
+    nome = nome or _campo_por_rotulo(texto, ["nome", "nome completo", "nome do trabalhador", "nome do segurado", "titular", "segurado"])
+    nome = nome or _nome_por_heuristica(texto)
+    cpf = _primeiro([r"CPF\s*[:\-]?\s*([0-9.\-]{11,14})", r"\b([0-9]{3}\.?[0-9]{3}\.?[0-9]{3}\-?[0-9]{2})\b"], texto)
+    pis = _primeiro([r"(?:PIS|NIT|PASEP|PIS/PASEP)\s*[:nº°\-]*\s*([0-9.\-]{8,20})"], texto)
+    pis = pis or _campo_por_rotulo(texto, ["PIS", "NIT", "PASEP", "PIS/PASEP"])
+    empregador = _primeiro([r"(?:empregador|empresa|razão social)\s*[:\-]\s*([^\n]+)"], texto)
+    empregador = empregador or _campo_por_rotulo(texto, ["empregador", "empresa", "razão social"])
+    funcao = _primeiro([r"(?:função|cargo|ocupação)\s*[:\-]\s*([^\n]+)"], texto)
+    funcao = funcao or _campo_por_rotulo(texto, ["função", "cargo", "ocupação"])
+    endereco = _primeiro([r"(?:endereço|resid[eê]ncia)\s*[:\-]\s*([^\n]+)"], texto)
+    # CTPS informa o endereço do estabelecimento, não o endereço residencial do cliente.
+    endereco = endereco or _campo_por_rotulo(texto, ["endereço", "residência"])
+    data_nascimento = _primeiro([r"(?:nascimento|nascido em)\s*[:\-]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})"], texto)
+    data_nascimento = data_nascimento or _campo_por_rotulo(texto, ["data de nascimento", "nascimento"])
+    admissao = _primeiro([r"(?:admissão|admissao|início|data de admissão)\s*[:\-]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})"], texto)
+    desligamento = _primeiro([r"(?:desligamento|saída|saida|data e código de afastamento)\s*[:\-]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})"], texto)
+    intervalos = re.findall(r"\b([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4})\s*[-–]\s*([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4})\b", texto)
+    if intervalos:
+        # A CTPS Digital lista o vínculo mais recente primeiro.
+        admissao = intervalos[0][0]
+        desligamento = intervalos[0][1]
+    admissao = admissao or _campo_por_rotulo(texto, ["data de admissão", "admissão", "admissao", "início"])
+    desligamento = desligamento or _campo_por_rotulo(texto, ["data e código de afastamento", "desligamento", "saída", "saida"])
+    salario = _primeiro([r"(?:salário|salario|remuneração)\s*[:\-]?\s*(R\$\s*[0-9.,]+)"], texto)
+    salario = salario or _campo_por_rotulo(texto, ["salário contratual", "salário", "remuneração"])
+    fgts_saldo = _primeiro([r"(?:saldo(?: disponível)?|saldo FGTS|valor para fins rescisórios)\s*[:\-]?\s*(R\$\s*[0-9.,]+)"], texto)
+    fgts_saldo = fgts_saldo or _campo_por_rotulo(texto, ["saldo", "saldo disponível", "saldo FGTS", "valor para fins rescisórios"])
     resultado = {
-        "nome": _primeiro([r"(?:nome(?: completo)?|titular)\s*[:\-]\s*([^\n]+)"], texto),
-        "cpf": _primeiro([r"CPF\s*[:\-]?\s*([0-9.\-]{11,14})", r"\b([0-9]{3}\.?[0-9]{3}\.?[0-9]{3}\-?[0-9]{2})\b"], texto),
+        "nome": nome,
+        "cpf": cpf,
         "rg": _primeiro([r"(?:RG|identidade|CI)\s*[:nº°\-]*\s*([0-9.\-]{4,20})"], texto),
-        "pis": _primeiro([r"(?:PIS|NIT|PASEP)\s*[:nº°\-]*\s*([0-9.\-]{8,20})"], texto),
-        "endereco": _primeiro([r"(?:endereço|resid[eê]ncia)\s*[:\-]\s*([^\n]+)"], texto),
-        "data_nascimento": _primeiro([r"(?:nascimento|nascido em)\s*[:\-]?\s*([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})"], texto),
-        "empregador": _primeiro([r"(?:empregador|empresa|razão social)\s*[:\-]\s*([^\n]+)"], texto),
-        "funcao": _primeiro([r"(?:função|cargo|ocupação)\s*[:\-]\s*([^\n]+)"], texto),
-        "admissao": _primeiro([r"(?:admissão|admissao|início)\s*[:\-]?\s*([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})"], texto),
-        "desligamento": _primeiro([r"(?:desligamento|saída|saida)\s*[:\-]?\s*([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})"], texto),
-        "salario": _primeiro([r"(?:salário|salario|remuneração)\s*[:\-]?\s*(R\$\s*[0-9.,]+)"], texto),
-        "fgts_saldo": _primeiro([r"(?:saldo(?: disponível)?|saldo FGTS)\s*[:\-]?\s*(R\$\s*[0-9.,]+)"], texto),
+        "pis": pis,
+        "endereco": endereco,
+        "data_nascimento": data_nascimento,
+        "empregador": empregador,
+        "funcao": funcao,
+        "admissao": admissao,
+        "desligamento": desligamento,
+        "salario": salario,
+        "fgts_saldo": fgts_saldo,
     }
     return {chave: _normalizar_documento(valor) for chave, valor in resultado.items() if valor}
 

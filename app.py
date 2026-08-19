@@ -22,6 +22,14 @@ if "dados" not in st.session_state:
 if "textos" not in st.session_state:
     st.session_state.textos = []
 
+
+def mesclar_dados_existentes(encontrados: dict[str, str]) -> None:
+    """Mescla documentos sem deixar um OCR posterior apagar um valor melhor."""
+    for chave, novo_valor in encontrados.items():
+        antigo = st.session_state.dados.get(chave, "")
+        if not antigo or (chave == "nome" and len(novo_valor) > len(antigo)):
+            st.session_state.dados[chave] = novo_valor
+
 st.subheader("1. Envie os documentos")
 arquivos = st.file_uploader(
     "CTPS, extrato de FGTS, RG, CPF ou comprovante de endereço",
@@ -37,10 +45,12 @@ if arquivos and st.button("Ler documentos", type="primary"):
             try:
                 texto = ler_documento(arquivo, arquivo.name)
                 textos.append(f"--- {arquivo.name} ---\n{texto}")
-                encontrados.update(extrair_campos(texto))
+                for chave, valor in extrair_campos(texto).items():
+                    if chave not in encontrados or not encontrados[chave] or (chave == "nome" and len(valor) > len(encontrados[chave])):
+                        encontrados[chave] = valor
             except Exception as erro:
                 st.error(f"Não foi possível ler {arquivo.name}: {erro}")
-    st.session_state.dados.update(encontrados)
+    mesclar_dados_existentes(encontrados)
     st.session_state.textos = textos
     st.success(f"Leitura concluída. {len(encontrados)} campo(s) foram encontrados; confira tudo abaixo.")
 
