@@ -1,211 +1,129 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+from __future__ import annotations
+
 import json
-import os
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
+
 from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 
-def carregar_dados(arquivo_json="dados.json"):
-    """Carrega os dados do arquivo JSON"""
-    try:
-        with open(arquivo_json, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"Erro: Arquivo '{arquivo_json}' não encontrado!")
-        exit(1)
-    except json.JSONDecodeError:
-        print(f"Erro: Arquivo '{arquivo_json}' não é um JSON válido!")
-        exit(1)
+ROOT = Path(__file__).resolve().parent
+SAIDA = ROOT / "saida"
 
-def processar_campos(texto, dados_cliente):
-    """Substitui os campos dinâmicos no texto"""
-    # Mapeia os placeholders para os dados
-    substituicoes = {
-        '«RECLAMANTE»': dados_cliente.get('nome', 'RODRIGO MEIRELES DA SILVA'),
-        '«CPF»': dados_cliente.get('cpf', '727.32296104    '),
-        '«RG»': dados_cliente.get('rg', '441899'),
-        '«PIS»': dados_cliente.get('pis', '19191919191'),
-        '«ENDEREÇO»': dados_cliente.get('endereco', 'RUA OK'),
-        '«DATA_ATUAL»': dados_cliente.get('data', datetime.now().strftime('%d de %B de %Y'))
-    }
-    
-    # Se não houver RG, remove a referência a ele
-    if not dados_cliente.get('rg'):
-        texto = texto.replace('portador(a) do CI/RG nº «RG», ', '')
-        texto = texto.replace(', portador(a) do CI/RG nº «RG»', '')
-    
-    # Se não houver PIS, remove a referência a ele
-    if not dados_cliente.get('pis'):
-        texto = texto.replace('portador(a) do PIS nº «PIS», ', '')
-        texto = texto.replace(', portador(a) do PIS nº «PIS»', '')
-    
-    # Realiza as substituições
-    for placeholder, valor in substituicoes.items():
-        texto = texto.replace(placeholder, valor)
-    
+PLACEHOLDERS = {
+    "«RECLAMANTE»": "nome",
+    "«CPF»": "cpf",
+    "«RG»": "rg",
+    "«PIS»": "pis",
+    "«ENDEREÇO»": "endereco",
+    "«DATA_ATUAL»": "data",
+}
+
+MODELOS = {
+    "contrato": (ROOT / "modelo_contrato.docx", "contrato"),
+    "procuracao": (ROOT / "modelo_procuracao.docx", "procuracao"),
+    "hipossuficiencia": (ROOT / "modelo_hipossuficiencia.docx", "declaracao_hipossuficiencia"),
+}
+
+
+def carregar_dados(arquivo_json: str | Path = ROOT / "dados.json") -> dict:
+    with open(arquivo_json, "r", encoding="utf-8") as arquivo:
+        return json.load(arquivo)
+
+
+def valor_dado(dados: dict, campo: str) -> str:
+    valor = str(dados.get(campo, "") or "").strip()
+    if valor:
+        return valor
+    if campo == "data":
+        return datetime.now().strftime("%d/%m/%Y")
+    return ""
+
+
+def substituir_texto(texto: str, dados: dict) -> str:
+    for placeholder, campo in PLACEHOLDERS.items():
+        texto = texto.replace(placeholder, valor_dado(dados, campo))
     return texto
 
-def carregar_template(arquivo_template):
-    """Carrega o conteúdo do template"""
-    try:
-        with open(arquivo_template, 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"Erro: Template '{arquivo_template}' não encontrado!")
-        exit(1)
 
-def adicionar_paragrafo_com_negrito(doc, texto, dados_cliente):
-    """Adiciona um parágrafo, colocando o nome do cliente em negrito"""
-    nome_cliente = dados_cliente.get('nome', '')
-    
-    # Processa os campos primeiro
-    texto_processado = processar_campos(texto, dados_cliente)
-    
-    # Se o texto contém o nome do cliente, faz em negrito
-    if nome_cliente and nome_cliente in texto_processado:
-        paragrafo = doc.add_paragraph()
-        
-        # Divide o texto pelo nome
-        partes = texto_processado.split(nome_cliente)
-        
-        if len(partes) > 1:
-            # Adiciona a parte antes do nome
-            if partes[0]:
-                paragrafo.add_run(partes[0])
-            
-            # Adiciona o nome em negrito
-            run_nome = paragrafo.add_run(nome_cliente)
-            run_nome.bold = True
-            
-            # Adiciona o resto do texto
-            for parte in partes[1:]:
-                paragrafo.add_run(parte)
+def substituir_em_paragrafo(paragrafo, dados: dict) -> None:
+    # Primeiro tenta preservar o estilo dos runs, que é o caso normal dos modelos.
+    encontrou = False
+    for run in paragrafo.runs:
+        novo = substituir_texto(run.text or "", dados)
+        if novo != run.text:
+            run.text = novo
+            encontrou = True
+    # Alguns editores dividem o placeholder entre vários runs; nesse caso,
+    # reescrevemos apenas o parágrafo, preservando o formato do parágrafo.
+    texto_atual = "".join(run.text or "" for run in paragrafo.runs)
+    texto_novo = substituir_texto(texto_atual, dados)
+    if texto_novo != texto_atual and not encontrou:
+        paragrafo.text = texto_novo
+
+
+def substituir_no_documento(documento: Document, dados: dict) -> None:
+    for paragrafo in documento.paragraphs:
+        substituir_em_paragrafo(paragrafo, dados)
+    for tabela in documento.tables:
+        for linha in tabela.rows:
+            for celula in linha.cells:
+                for paragrafo in celula.paragraphs:
+                    substituir_em_paragrafo(paragrafo, dados)
+    for secao in documento.sections:
+        for parte in (secao.header, secao.footer):
+            for paragrafo in parte.paragraphs:
+                substituir_em_paragrafo(paragrafo, dados)
+
+
+def converter_para_pdf(arquivo_docx: Path) -> Path | None:
+    arquivo_pdf = arquivo_docx.with_suffix(".pdf")
+    try:
+        executavel = shutil.which("libreoffice") or shutil.which("soffice")
+        if executavel:
+            subprocess.run(
+                [executavel, "--headless", "--convert-to", "pdf", "--outdir", str(arquivo_docx.parent), str(arquivo_docx)],
+                check=True,
+                capture_output=True,
+            )
         else:
-            # Se não encontrou o nome exato, adiciona normal
-            paragrafo.add_run(texto_processado)
-        
-        return paragrafo
-    else:
-        # Adiciona normal
-        return doc.add_paragraph(texto_processado)
+            from docx2pdf import convert
+            convert(str(arquivo_docx), str(arquivo_pdf))
+        return arquivo_pdf if arquivo_pdf.exists() else None
+    except Exception as erro:
+        print(f"Aviso: não foi possível criar {arquivo_pdf.name}: {erro}")
+        return None
 
-def criar_documento(template_word, conteudo_texto, nome_arquivo, dados_cliente):
-    """Cria um documento Word com base no template"""
-    # Carrega o documento template
-    try:
-        doc = Document(template_word)
-        print(f"   Usando template: {template_word}")
-    except FileNotFoundError:
-        print(f"⚠️  Template Word '{template_word}' não encontrado!")
-        print("   Criando documento sem template visual...")
-        doc = Document()
-    
-    # Cria pasta de saída se não existir
-    pasta_saida = Path("saida")
-    pasta_saida.mkdir(exist_ok=True)
-    
-    # Processa o conteúdo
-    linhas = conteudo_texto.split('\n')
-    
-    for linha in linhas:
-        linha = linha.strip()
-        
-        if not linha:
-            # Linha vazia
-            doc.add_paragraph()
-        elif linha.isupper() and len(linha) > 3:
-            # Título (texto em maiúsculas)
-            titulo = doc.add_paragraph()
-            titulo.style = 'Heading 1'
-            titulo_run = titulo.add_run(linha)
-            titulo_run.bold = True
-            titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        else:
-            # Conteúdo normal (pode ter nome em negrito)
-            adicionar_paragrafo_com_negrito(doc, linha, dados_cliente)
-    
-    # Salva o documento
-    caminho_docx = pasta_saida / nome_arquivo
-    
-    try:
-        doc.save(str(caminho_docx))
-        print(f"✓ Documento criado: {caminho_docx}")
-        return True
-    except Exception as e:
-        print(f"✗ Erro ao criar documento {nome_arquivo}: {e}")
-        return False
 
-def converter_para_pdf(arquivo_docx):
-    """Converte o documento Word para PDF"""
-    try:
-        from docx2pdf import convert
-        arquivo_pdf = str(arquivo_docx).replace('.docx', '.pdf')
-        convert(str(arquivo_docx), arquivo_pdf)
-        print(f"✓ PDF criado: {arquivo_pdf}")
-        return True
-    except ImportError:
-        print("⚠️  Para gerar PDFs, instale: pip install python-docx python-docx2pdf")
-        return False
-    except Exception as e:
-        print(f"⚠️  Erro ao converter para PDF: {e}")
-        return False
+def gerar_documentos_a_partir_dados(dados_cliente: dict) -> list[str]:
+    SAIDA.mkdir(exist_ok=True)
+    nome = valor_dado(dados_cliente, "nome") or "cliente"
+    nome_seguro = "_".join(parte for parte in nome.lower().split() if parte.isalnum())
+    arquivos_gerados: list[str] = []
+    for tipo, (modelo, prefixo) in MODELOS.items():
+        if not modelo.exists():
+            raise FileNotFoundError(f"Modelo ausente: {modelo.name}")
+        destino_docx = SAIDA / f"{prefixo}_{nome_seguro}.docx"
+        documento = Document(str(modelo))
+        substituir_no_documento(documento, dados_cliente)
+        documento.save(str(destino_docx))
+        arquivos_gerados.append(str(destino_docx))
+        pdf = converter_para_pdf(destino_docx)
+        if pdf:
+            arquivos_gerados.append(str(pdf))
+    return arquivos_gerados
 
-def gerar_documentos():
-    """Função principal que gera todos os documentos"""
-    print("\n" + "="*60)
-    print("GERADOR DE DOCUMENTOS ADVOCATÍCIOS - MEIRELES E SOUZA")
-    print("="*60 + "\n")
-    
-    # Carrega os dados
-    dados = carregar_dados()
-    cliente = dados.get('cliente', {})
-    nome_cliente = cliente.get('nome', 'cliente').lower().replace(' ', '_')
-    
-    print(f"👤 Cliente: {cliente.get('nome')}")
-    print(f"📋 CPF: {cliente.get('cpf')}")
-    print(f"📋 RG: {cliente.get('rg', 'Não informado')}")
-    print(f"📋 PIS: {cliente.get('pis', 'Não informado')}")
-    print(f"📍 Endereço: {cliente.get('endereco')}")
-    print("\n" + "-"*60 + "\n")
-    
-    # Usa o template Word disponível
-    template_word = "Modelo Pagina 2.docx"
-    
-    # Templates
-    templates = [
-        ("templates/contrato.txt", "Contrato de Serviços Advocatícios", f"01_contrato_{nome_cliente}.docx"),
-        ("templates/hipossuficiencia.txt", "Declaração de Hipossuficiência", f"02_hipossuficiencia_{nome_cliente}.docx"),
-        ("templates/procuracao.txt", "Procuração Ad-Judicia", f"03_procuracao_{nome_cliente}.docx"),
-    ]
-    
-    documentos_gerados = 0
-    
-    # Gera cada documento
-    for arquivo_template, nome_doc, nome_saida in templates:
-        print(f"📝 Processando: {nome_doc}...")
-        
-        # Carrega o template de texto
-        template = carregar_template(arquivo_template)
-        
-        # Cria o documento
-        if criar_documento(template_word, template, nome_saida, cliente):
-            documentos_gerados += 1
-            
-            # Tenta converter para PDF
-            arquivo_docx = Path("saida") / nome_saida
-            converter_para_pdf(arquivo_docx)
-    
-    print("\n" + "-"*60)
-    print(f"\n✅ Processo concluído!")
-    print(f"✅ {documentos_gerados} documento(s) gerado(s) na pasta 'saida/'")
-    print(f"📁 Local: {Path('saida').absolute()}")
-    print("\n" + "="*60 + "\n")
+
+def gerar_documentos() -> list[str]:
+    dados = carregar_dados().get("cliente", {})
+    arquivos = gerar_documentos_a_partir_dados(dados)
+    print(f"Processo concluído: {len(arquivos)} arquivo(s) em {SAIDA}")
+    return arquivos
+
 
 if __name__ == "__main__":
     gerar_documentos()

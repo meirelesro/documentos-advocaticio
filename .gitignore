@@ -1,0 +1,13 @@
+saida/
+__pycache__/
+*.pdf
+*.docx
+!modelo_contrato.docx
+!modelo_procuracao.docx
+!modelo_hipossuficiencia.docx
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.tif
+*.tiff
