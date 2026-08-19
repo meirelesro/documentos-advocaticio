@@ -13,6 +13,15 @@ from docx import Document
 
 ROOT = Path(__file__).resolve().parent
 SAIDA = ROOT / "saida"
+MESES_PT = (
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+)
+
+
+def data_hoje_portugues() -> str:
+    hoje = datetime.now()
+    return f"{hoje.day} de {MESES_PT[hoje.month - 1]} de {hoje.year}"
 
 PLACEHOLDERS = {
     "«RECLAMANTE»": "nome",
@@ -40,7 +49,7 @@ def valor_dado(dados: dict, campo: str) -> str:
     if valor:
         return valor
     if campo == "data":
-        return datetime.now().strftime("%d/%m/%Y")
+        return data_hoje_portugues()
     return ""
 
 

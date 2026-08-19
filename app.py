@@ -8,6 +8,18 @@ from pathlib import Path
 
 import streamlit as st
 
+
+MESES_PT = (
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+)
+
+
+def data_hoje_portugues() -> str:
+    hoje = date.today()
+    return f"{hoje.day} de {MESES_PT[hoje.month - 1]} de {hoje.year}"
+
+
 from extracao_documentos import CAMPOS, campos_faltantes, extrair_campos, ler_documento
 from gerar_pdfs import gerar_documentos_a_partir_dados
 
@@ -18,7 +30,7 @@ st.write("Envie os documentos do cliente, confira os dados identificados e gere 
 st.info("Os arquivos são processados localmente nesta execução. Não envie documentos pessoais para o repositório público do GitHub.")
 
 if "dados" not in st.session_state:
-    st.session_state.dados = {"data": date.today().strftime("%d de %B de %Y")}
+    st.session_state.dados = {"data": data_hoje_portugues()}
 if "textos" not in st.session_state:
     st.session_state.textos = []
 
